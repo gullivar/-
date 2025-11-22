@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { DashboardStats } from '../types';
 import { generateDashboardInsight } from '../services/geminiService';
@@ -7,6 +8,28 @@ import { Users, CalendarCheck, TrendingUp, Sparkles } from 'lucide-react';
 interface DashboardProps {
   stats: DashboardStats;
 }
+
+const CustomTooltip = ({ active, payload, label }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    return (
+      <div className="bg-white p-3 border border-gray-100 shadow-lg rounded-xl text-sm z-50">
+        <p className="font-bold text-gray-700 mb-2 border-b border-gray-100 pb-1">{label}</p>
+        <div className="space-y-1">
+          <p className="text-indigo-600 font-semibold flex justify-between gap-4">
+            <span>출석률:</span>
+            <span>{Math.round(data.rate)}%</span>
+          </p>
+          <p className="text-gray-500 text-xs flex justify-between gap-4">
+            <span>출석 인원:</span>
+            <span>{data.count}명</span>
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return null;
+};
 
 const Dashboard: React.FC<DashboardProps> = ({ stats }) => {
   const [aiInsight, setAiInsight] = useState<string>("");
@@ -19,8 +42,6 @@ const Dashboard: React.FC<DashboardProps> = ({ stats }) => {
     setLoadingInsight(false);
   };
 
-  // Auto-load insight if stats change significantly or on first mount (optional, keeping manual for cost control)
-  // For this demo, let's load it automatically if empty.
   useEffect(() => {
       if (!aiInsight && stats.totalStudents > 0) {
           handleGetInsight();
@@ -83,8 +104,8 @@ const Dashboard: React.FC<DashboardProps> = ({ stats }) => {
                 <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fill: '#6b7280', fontSize: 12}} dy={10} />
                 <YAxis axisLine={false} tickLine={false} tick={{fill: '#6b7280', fontSize: 12}} domain={[0, 100]} unit="%" />
                 <Tooltip 
+                  content={<CustomTooltip />}
                   cursor={{fill: '#f3f4f6'}}
-                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                 />
                 <Bar dataKey="rate" radius={[6, 6, 0, 0]}>
                   {stats.recentTrend.map((entry, index) => (

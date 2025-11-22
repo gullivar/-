@@ -1,17 +1,20 @@
-import React, { useState, useEffect } from 'react';
+
+import React, { useState, useEffect, useRef } from 'react';
 import { Student, DailyAttendance, AttendanceStatus } from '../types';
-import { Calendar, ChevronLeft, ChevronRight, Save, CheckCircle2, XCircle, Clock, AlertCircle, Download } from 'lucide-react';
+import { Calendar, ChevronLeft, ChevronRight, Save, CheckCircle2, XCircle, Clock, AlertCircle, Download, Upload } from 'lucide-react';
 
 interface AttendanceTrackerProps {
   students: Student[];
   attendanceHistory: DailyAttendance[];
   onSaveAttendance: (date: string, records: any[]) => void;
+  onImportAttendance: (history: DailyAttendance[]) => void;
 }
 
-const AttendanceTracker: React.FC<AttendanceTrackerProps> = ({ students, attendanceHistory, onSaveAttendance }) => {
+const AttendanceTracker: React.FC<AttendanceTrackerProps> = ({ students, attendanceHistory, onSaveAttendance, onImportAttendance }) => {
   const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [currentRecords, setCurrentRecords] = useState<Record<string, AttendanceStatus>>({});
   const [filterCell, setFilterCell] = useState<string>("All");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Initialize records when date changes
   useEffect(() => {
@@ -61,7 +64,6 @@ const AttendanceTracker: React.FC<AttendanceTrackerProps> = ({ students, attenda
     // Ensure selectedDate is included if it's not in history yet
     if (!sortedDates.includes(selectedDate) && attendanceHistory.length > 0) {
         // Optional: decide if we want to export current unsaved state. 
-        // For simplicity, let's stick to saved history + current selection context
     }
 
     const headers = ['이름', '학년', '셀(구역)', ...sortedDates];
@@ -83,6 +85,92 @@ const AttendanceTracker: React.FC<AttendanceTrackerProps> = ({ students, attenda
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      if (!text) return;
+      
+      // Simple CSV parser
+      const rows = text.split('\n').map(row => row.split(',').map(cell => cell.trim()));
+      
+      if (rows.length < 1) return;
+
+      const header = rows[0];
+      // Assume first 3 columns are Name, Grade, Cell
+      // subsequent columns are dates (YYYY-MM-DD)
+      
+      const dateColumns: {index: number, date: string}[] = [];
+      
+      // Find columns that look like dates
+      header.forEach((col, idx) => {
+          if (idx >= 3 && col.match(/^\d{4}-\d{2}-\d{2}$/)) {
+              dateColumns.push({ index: idx, date: col });
+          }
+      });
+
+      if (dateColumns.length === 0) {
+          alert("날짜 형식이 포함된 열을 찾을 수 없습니다. (형식: YYYY-MM-DD)");
+          return;
+      }
+
+      const newDailyData: DailyAttendance[] = [];
+      // Prepare structure
+      dateColumns.forEach(dc => {
+          newDailyData.push({ date: dc.date, records: [] });
+      });
+
+      // Process rows
+      let successCount = 0;
+      for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (row.length < 3) continue;
+          
+          const name = row[0];
+          const cellName = row[2];
+          
+          // Match student
+          // Try match by Name AND Cell first, then just Name
+          let student = students.find(s => s.name === name && s.cellName === cellName);
+          if (!student) {
+              student = students.find(s => s.name === name);
+          }
+          
+          if (student) {
+              successCount++;
+              dateColumns.forEach((dc, dIndex) => {
+                  const statusStr = row[dc.index];
+                  // Validate status
+                  let status = AttendanceStatus.ABSENT;
+                  if (Object.values(AttendanceStatus).includes(statusStr as AttendanceStatus)) {
+                      status = statusStr as AttendanceStatus;
+                  } else if (statusStr === '-' || statusStr === '') {
+                      return; // Skip empty records
+                  }
+                  
+                  newDailyData[dIndex].records.push({
+                      studentId: student!.id,
+                      status: status
+                  });
+              });
+          }
+      }
+
+      onImportAttendance(newDailyData);
+      alert(`${dateColumns.length}일치 출석 기록을 불러왔습니다. (매칭된 학생: ${successCount}명)`);
+
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+    reader.readAsText(file);
   };
 
   const getStatusColor = (status: AttendanceStatus) => {
@@ -151,43 +239,66 @@ const AttendanceTracker: React.FC<AttendanceTrackerProps> = ({ students, attenda
 
       {/* Quick Stats & Actions */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-         <div className="bg-indigo-600 text-white rounded-xl p-4 shadow-md flex items-center justify-between">
-             <div>
-                 <p className="text-indigo-100 text-sm">오늘 출석</p>
-                 <p className="text-2xl font-bold">{presentCount} / {students.length}</p>
+         <div className="bg-indigo-600 text-white rounded-xl p-6 shadow-md flex flex-col justify-between">
+             <div className="flex items-center justify-between mb-4">
+                 <p className="text-indigo-100 text-sm font-medium">오늘 출석 현황</p>
+                 <div className="h-8 w-8 bg-white/20 rounded-full flex items-center justify-center">
+                     <CheckCircle2 size={16} />
+                 </div>
              </div>
-             <div className="h-10 w-10 bg-white/20 rounded-full flex items-center justify-center">
-                 <CheckCircle2 />
+             <div>
+                 <p className="text-4xl font-bold mb-1">{presentCount} <span className="text-xl font-normal text-indigo-200">/ {students.length}</span></p>
+                 <p className="text-xs text-indigo-200">현재 출석률 {students.length > 0 ? Math.round((presentCount / students.length) * 100) : 0}%</p>
              </div>
          </div>
          
-         <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-200 flex items-center justify-between col-span-2 flex-wrap gap-3">
-             <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+         <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-200 col-span-2 flex flex-col gap-3">
+             {/* Filter */}
+             <div className="w-full">
                  <select 
                     value={filterCell} 
                     onChange={(e) => setFilterCell(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-gray-50"
+                    className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-gray-50 text-base font-medium"
                  >
-                     <option value="All">모든 셀(구역)</option>
+                     <option value="All">모든 셀(구역) 보기</option>
                      {uniqueCells.map(cell => <option key={cell} value={cell}>{cell}</option>)}
                  </select>
              </div>
              
-             <div className="flex items-center gap-2">
+             {/* Actions Stack - Full width rows */}
+             <div className="grid grid-cols-1 md:grid-cols-3 gap-2 w-full">
+                <input 
+                    type="file" 
+                    accept=".csv" 
+                    ref={fileInputRef} 
+                    onChange={handleFileChange} 
+                    className="hidden" 
+                />
+                
+                <button
+                    onClick={handleImportClick}
+                    className="w-full flex items-center justify-center px-4 py-3 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition shadow-sm font-bold"
+                    title="출석부 파일 불러오기"
+                >
+                    <Upload size={18} className="mr-2" />
+                    가져오기
+                </button>
+                
                 <button
                     onClick={handleExportCSV}
-                    className="flex items-center px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition shadow-sm font-medium"
+                    className="w-full flex items-center justify-center px-4 py-3 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition shadow-sm font-bold"
                     title="전체 출석 기록 다운로드"
                 >
                     <Download size={18} className="mr-2" />
-                    엑셀 저장
+                    내보내기
                 </button>
+                
                 <button 
                     onClick={handleSave}
-                    className="flex items-center px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition shadow-md"
+                    className="w-full flex items-center justify-center px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold transition shadow-md"
                 >
                     <Save size={18} className="mr-2" />
-                    저장하기
+                    출석상태 내용 저장
                 </button>
              </div>
          </div>

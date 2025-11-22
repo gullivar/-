@@ -28,5 +28,5 @@ export interface DailyAttendance {
 export interface DashboardStats {
   totalStudents: number;
   attendanceRate: number; // Percentage
-  recentTrend: { date: string; rate: number }[];
+  recentTrend: { date: string; rate: number; count: number }[];
 }

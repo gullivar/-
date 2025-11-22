@@ -1,9 +1,14 @@
-import React, { useState, useEffect } from 'react';
+
+import React, { useState, useEffect, useMemo } from 'react';
 import { Student, DailyAttendance, DashboardStats, AttendanceStatus } from './types';
 import Dashboard from './components/Dashboard';
 import StudentManager from './components/StudentManager';
 import AttendanceTracker from './components/AttendanceTracker';
-import { LayoutDashboard, Users, ClipboardList, Church } from 'lucide-react';
+import Settings from './components/Settings';
+import GlobalLoading from './components/GlobalLoading';
+import { storageService } from './services/storage';
+import { actionQueue } from './services/queueService';
+import { LayoutDashboard, Users, ClipboardList, Church, Settings as SettingsIcon } from 'lucide-react';
 
 // --- Helper for Random Data Generation ---
 const generateInitialStudents = (): Student[] => {
@@ -13,8 +18,9 @@ const generateInitialStudents = (): Student[] => {
     "전소민", "김연아", "손흥민", "류현진", "박찬호", "이승엽", "추신수", "강호동", "신동엽", "이수근"
   ];
   
-  const cells3 = ["3학년 1반", "3학년 2반", "3학년 3반", "3학년 4반"];
-  const cells4 = ["4학년 1반", "4학년 2반", "4학년 3반", "4학년 4반"];
+  // Biblical names for cells
+  const cells3 = ["다윗셀", "요셉셀", "다니엘셀", "요나셀"];
+  const cells4 = ["바울셀", "베드로셀", "요한셀", "디모데셀"];
   
   const teachers3 = ["김선생", "이선생", "박선생", "최선생"];
   const teachers4 = ["정선생", "강선생", "조선생", "윤선생"];
@@ -22,17 +28,12 @@ const generateInitialStudents = (): Student[] => {
   const students: Student[] = [];
 
   for (let i = 0; i < 30; i++) {
-    // Randomly assign grade (roughly half and half, but random)
-    // To ensure we use all cells, let's distribute somewhat evenly or just random.
-    // Let's try to be slightly more deterministic to ensure we hit requirements if needed, 
-    // but random is fine for "30명 임의로 등록".
-    const is3rd = i < 15; // First 15 are 3rd grade, rest are 4th grade for even split
+    const is3rd = i < 15; 
     
     const grade = is3rd ? "3학년" : "4학년";
     const cellList = is3rd ? cells3 : cells4;
     const teacherList = is3rd ? teachers3 : teachers4;
     
-    // Random cell within grade
     const cellIndex = Math.floor(Math.random() * 4);
     const cellName = cellList[cellIndex];
     const teacherName = teacherList[cellIndex];
@@ -50,58 +51,169 @@ const generateInitialStudents = (): Student[] => {
   return students;
 };
 
-// --- Mock Initial Data Helper ---
-const loadInitialStudents = (): Student[] => {
-  const stored = localStorage.getItem('students');
-  if (stored) {
-    const parsed = JSON.parse(stored);
-    if (parsed.length > 0) return parsed;
-  }
-  // If empty, generate 30 random students as requested
-  return generateInitialStudents();
+// Helper for generating random attendance for past 4 weeks
+const generateInitialAttendance = (students: Student[]): DailyAttendance[] => {
+    const today = new Date();
+    const history: DailyAttendance[] = [];
+    
+    // Generate 4 past Sundays
+    for(let i = 0; i < 4; i++) {
+        const d = new Date(today);
+        d.setDate(today.getDate() - (i * 7)); // Go back weeks
+        // Adjust to nearest Sunday if not (simple mock logic, just using calculated date)
+        
+        const dateStr = d.toISOString().split('T')[0];
+        
+        const records = students.map(s => {
+            const rand = Math.random();
+            let status = AttendanceStatus.PRESENT;
+            if(rand > 0.85) status = AttendanceStatus.ABSENT;
+            else if (rand > 0.75) status = AttendanceStatus.LATE;
+            else if (rand > 0.70) status = AttendanceStatus.EXCUSED;
+            
+            return {
+                studentId: s.id,
+                status
+            };
+        });
+        
+        history.push({ date: dateStr, records });
+    }
+    
+    return history;
 };
 
-const loadInitialAttendance = (): DailyAttendance[] => {
-  const stored = localStorage.getItem('attendance');
-  return stored ? JSON.parse(stored) : [];
-};
 
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'students' | 'attendance'>('dashboard');
-  const [students, setStudents] = useState<Student[]>(loadInitialStudents);
-  const [attendanceHistory, setAttendanceHistory] = useState<DailyAttendance[]>(loadInitialAttendance);
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'students' | 'attendance' | 'settings'>('dashboard');
+  const [isProcessing, setIsProcessing] = useState(false);
+  
+  // Initialize state with storage service
+  const [students, setStudents] = useState<Student[]>(() => {
+    const loaded = storageService.loadStudents();
+    return loaded.length > 0 ? loaded : generateInitialStudents();
+  });
+  
+  const [attendanceHistory, setAttendanceHistory] = useState<DailyAttendance[]>(() => {
+    return storageService.loadAttendance();
+  });
+
+  // Queue Listener
+  useEffect(() => {
+    const unsubscribe = actionQueue.subscribe((status) => {
+        setIsProcessing(status);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Generate mock attendance if empty
+  useEffect(() => {
+      if (students.length > 0 && attendanceHistory.length === 0) {
+          const initialHistory = generateInitialAttendance(students);
+          setAttendanceHistory(initialHistory);
+      }
+  }, [students, attendanceHistory.length]);
 
   // --- Persistence ---
   useEffect(() => {
-    localStorage.setItem('students', JSON.stringify(students));
+    storageService.saveStudents(students);
   }, [students]);
 
   useEffect(() => {
-    localStorage.setItem('attendance', JSON.stringify(attendanceHistory));
+    storageService.saveAttendance(attendanceHistory);
   }, [attendanceHistory]);
 
-  // --- Logic ---
-  const addStudent = (student: Student) => setStudents([...students, student]);
-  const updateStudent = (updated: Student) => setStudents(students.map(s => s.id === updated.id ? updated : s));
-  const deleteStudent = (id: string) => setStudents(students.filter(s => s.id !== id));
+  // --- Logic with Queue ---
+  const addStudent = (student: Student) => {
+      actionQueue.enqueue(async () => {
+          setStudents(prev => [...prev, student]);
+      });
+  };
+  
+  const importStudents = (newStudents: Student[]) => {
+      actionQueue.enqueue(async () => {
+          setStudents(prev => [...prev, ...newStudents]);
+      });
+  };
+
+  const updateStudent = (updated: Student) => {
+      actionQueue.enqueue(async () => {
+          setStudents(prev => prev.map(s => s.id === updated.id ? updated : s));
+      });
+  };
+  
+  const deleteStudent = (id: string) => {
+      actionQueue.enqueue(async () => {
+          if(window.confirm("정말로 삭제하시겠습니까?")) {
+             setStudents(prev => prev.filter(s => s.id !== id));
+          }
+      });
+  };
 
   const saveAttendance = (date: string, records: {studentId: string, status: AttendanceStatus}[]) => {
-    setAttendanceHistory(prev => {
-      const filtered = prev.filter(p => p.date !== date);
-      return [...filtered, { date, records }];
+      actionQueue.enqueue(async () => {
+          setAttendanceHistory(prev => {
+            const filtered = prev.filter(p => p.date !== date);
+            return [...filtered, { date, records }];
+          });
+      });
+  };
+
+  const importAttendance = (newDailyAttendance: DailyAttendance[]) => {
+      actionQueue.enqueue(async () => {
+        setAttendanceHistory(prev => {
+            const historyMap = new Map<string, DailyAttendance>();
+            prev.forEach(d => historyMap.set(d.date, d));
+
+            newDailyAttendance.forEach(newItem => {
+                if (historyMap.has(newItem.date)) {
+                const existing = historyMap.get(newItem.date)!;
+                const existingRecordsMap = new Map(existing.records.map(r => [r.studentId, r]));
+                
+                newItem.records.forEach(newRecord => {
+                    existingRecordsMap.set(newRecord.studentId, newRecord);
+                });
+
+                historyMap.set(newItem.date, {
+                    ...existing,
+                    records: Array.from(existingRecordsMap.values())
+                });
+                } else {
+                historyMap.set(newItem.date, newItem);
+                }
+            });
+
+            return Array.from(historyMap.values());
+        });
+      });
+  };
+
+  // --- Full DB Restore Handler ---
+  const handleRestoreDatabase = async (file: File) => {
+    actionQueue.enqueue(async () => {
+        try {
+            if (!window.confirm("데이터베이스를 복원하면 현재 데이터가 덮어씌워집니다. 계속하시겠습니까?")) return;
+            
+            const data = await storageService.importDatabase(file);
+            if (data) {
+              setStudents(data.students);
+              setAttendanceHistory(data.attendance);
+              alert("데이터베이스가 성공적으로 복원되었습니다.");
+            }
+        } catch (e) {
+            alert("데이터베이스 복원 중 오류가 발생했습니다. 파일 형식을 확인해주세요.");
+        }
     });
   };
 
   // --- Stats Calculation for Dashboard ---
-  const calculateStats = (): DashboardStats => {
+  const dashboardStats: DashboardStats = useMemo(() => {
     const totalStudents = students.length;
     if (totalStudents === 0) return { totalStudents: 0, attendanceRate: 0, recentTrend: [] };
 
-    // Get last 4 entries sorted by date
     const sortedHistory = [...attendanceHistory].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     const recent = sortedHistory.slice(-4);
 
-    // Calculate current (latest) rate
     const latest = recent[recent.length - 1];
     let currentRate = 0;
     if (latest) {
@@ -109,11 +221,11 @@ const App: React.FC = () => {
       currentRate = (present / totalStudents) * 100;
     }
 
-    // Calculate Trend
     const recentTrend = recent.map(day => {
       const presentCount = day.records.filter(r => r.status === AttendanceStatus.PRESENT).length;
       const rate = (presentCount / totalStudents) * 100;
-      return { date: day.date.substring(5), rate }; // MM-DD format
+      // Add count for tooltip
+      return { date: day.date.substring(5), rate, count: presentCount }; 
     });
 
     return {
@@ -121,16 +233,19 @@ const App: React.FC = () => {
       attendanceRate: currentRate,
       recentTrend
     };
-  };
+  }, [students, attendanceHistory]);
 
   const navItems = [
     { id: 'dashboard', label: '대시보드', icon: LayoutDashboard },
+    { id: 'attendance', label: '출석관리', icon: ClipboardList },
     { id: 'students', label: '학생 관리', icon: Users },
-    { id: 'attendance', label: '출석부', icon: ClipboardList },
+    { id: 'settings', label: '설정', icon: SettingsIcon },
   ] as const;
 
   return (
     <div className="min-h-screen flex bg-gray-50 font-sans text-gray-900">
+      <GlobalLoading isLoading={isProcessing} />
+
       {/* Sidebar (Desktop) */}
       <aside className="hidden lg:flex flex-col w-64 bg-white border-r border-gray-200 fixed h-full z-10">
         <div className="p-6 flex items-center gap-3 border-b border-gray-100">
@@ -144,7 +259,7 @@ const App: React.FC = () => {
           {navItems.map(item => (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => setActiveTab(item.id as any)}
               className={`w-full flex items-center px-4 py-3 rounded-xl transition-all duration-200 group ${
                 activeTab === item.id 
                   ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-sm' 
@@ -162,10 +277,10 @@ const App: React.FC = () => {
 
         <div className="p-4 border-t border-gray-100">
           <div className="bg-gray-50 rounded-xl p-4">
-            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">System Status</p>
-            <div className="flex items-center gap-2 text-sm text-green-600">
-              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-              Operational
+            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Data Storage</p>
+            <div className="flex items-center gap-2 text-sm text-indigo-600">
+              <span className="w-2 h-2 bg-indigo-500 rounded-full"></span>
+              JSON DB / Queue Mode
             </div>
           </div>
         </div>
@@ -176,7 +291,7 @@ const App: React.FC = () => {
          {navItems.map(item => (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => setActiveTab(item.id as any)}
               className={`flex flex-col items-center p-2 rounded-lg ${
                 activeTab === item.id ? 'text-indigo-600' : 'text-gray-400'
               }`}
@@ -189,11 +304,16 @@ const App: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-1 lg:ml-64 pb-20 lg:pb-0 transition-all duration-300">
-        {activeTab === 'dashboard' && <Dashboard stats={calculateStats()} />}
+        {activeTab === 'dashboard' && (
+          <Dashboard 
+            stats={dashboardStats} 
+          />
+        )}
         {activeTab === 'students' && (
           <StudentManager 
             students={students} 
             onAddStudent={addStudent} 
+            onImportStudents={importStudents}
             onUpdateStudent={updateStudent} 
             onDeleteStudent={deleteStudent} 
           />
@@ -203,6 +323,14 @@ const App: React.FC = () => {
             students={students} 
             attendanceHistory={attendanceHistory}
             onSaveAttendance={saveAttendance}
+            onImportAttendance={importAttendance}
+          />
+        )}
+        {activeTab === 'settings' && (
+          <Settings 
+            students={students}
+            attendanceHistory={attendanceHistory}
+            onRestoreDatabase={handleRestoreDatabase}
           />
         )}
       </main>
