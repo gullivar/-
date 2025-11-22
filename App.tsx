@@ -51,13 +51,13 @@ const generateInitialStudents = (): Student[] => {
   return students;
 };
 
-// Helper for generating random attendance for past 4 weeks
+// Helper for generating random attendance for past 5 weeks (Updated from 4)
 const generateInitialAttendance = (students: Student[]): DailyAttendance[] => {
     const today = new Date();
     const history: DailyAttendance[] = [];
     
-    // Generate 4 past Sundays
-    for(let i = 0; i < 4; i++) {
+    // Generate 5 past Sundays
+    for(let i = 0; i < 5; i++) {
         const d = new Date(today);
         d.setDate(today.getDate() - (i * 7)); // Go back weeks
         // Adjust to nearest Sunday if not (simple mock logic, just using calculated date)
@@ -212,7 +212,8 @@ const App: React.FC = () => {
     if (totalStudents === 0) return { totalStudents: 0, attendanceRate: 0, recentTrend: [] };
 
     const sortedHistory = [...attendanceHistory].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    const recent = sortedHistory.slice(-4);
+    // Slice last 5 weeks instead of 4
+    const recent = sortedHistory.slice(-5);
 
     const latest = recent[recent.length - 1];
     let currentRate = 0;

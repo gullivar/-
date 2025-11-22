@@ -1,3 +1,4 @@
+
 import { GoogleGenAI } from "@google/genai";
 import { DashboardStats } from "../types";
 
@@ -14,7 +15,7 @@ export const generateDashboardInsight = async (stats: DashboardStats): Promise<s
       데이터:
       - 전체 학생 수: ${stats.totalStudents}명
       - 오늘/최근 평균 출석률: ${stats.attendanceRate.toFixed(1)}%
-      - 최근 4주 추세: ${JSON.stringify(stats.recentTrend)}
+      - 최근 5주 추세: ${JSON.stringify(stats.recentTrend)}
       
       말투는 정중하고 부드럽게, 300자 이내로 요약해주세요. 어린이들을 사랑하는 마음을 담아주세요.
     `;
